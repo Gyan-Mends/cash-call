@@ -1,19 +1,12 @@
 import {
   useLoaderData,
   useSearchParams,
-  useNavigation,
-  useActionData,
-  Form,
 } from "react-router";
 import {
-  Button,
   Chip,
   SelectItem,
-  addToast,
   TableRow,
   TableCell,
-  Tab,
-  Tabs,
   Card,
   CardBody,
 } from "@heroui/react";
@@ -23,9 +16,12 @@ import FadeUpPageEntry from "~/components/ui/animated-entry";
 import { DataTable } from "~/components/heroui/data-table";
 import { TextInput } from "~/components/heroui/inputs";
 import { SelectInput } from "~/components/heroui/select-inputs";
-import { SideDrawer } from "~/components/heroui/side-drawer";
 import { useDebounce } from "~/hooks/useDebounce";
 import SectionCard from "~/components/fragments/section-card";
+import {
+  InlineSelectCell,
+  InlineTextCell,
+} from "~/components/heroui/inline-edit-cell";
 import type { Route } from "./+types/critical-spares";
 
 interface CriticalSpareData {
@@ -50,12 +46,7 @@ interface CriticalSpareData {
 
 interface LoaderData {
   items: CriticalSpareData[];
-  pagination: {
-    page: number;
-    limit: number;
-    total: number;
-    totalPages: number;
-  };
+  pagination: { page: number; limit: number; total: number; totalPages: number };
   sectionCounts: { section: string; count: number; totalUSD: number }[];
 }
 
@@ -67,14 +58,14 @@ export async function loader({ request }: Route.LoaderArgs) {
   const authSession = await getAuthSession(request.headers.get("Cookie"));
   const auth = authSession.get("auth");
   if (!auth?.access_token) {
-    return { items: [], pagination: { page: 1, limit: 20, total: 0, totalPages: 0 }, sectionCounts: [] };
+    return { items: [], pagination: { page: 1, limit: 50, total: 0, totalPages: 0 }, sectionCounts: [] };
   }
 
   await connectDB();
 
   const url = new URL(request.url);
   const page = parseInt(url.searchParams.get("page") || "1");
-  const limit = parseInt(url.searchParams.get("limit") || "20");
+  const limit = parseInt(url.searchParams.get("limit") || "50");
   const search = url.searchParams.get("search") || "";
   const section = url.searchParams.get("section") || "";
   const finance2 = url.searchParams.get("finance2") || "";
@@ -90,12 +81,8 @@ export async function loader({ request }: Route.LoaderArgs) {
       { purchaseOrder: { $regex: escapeRegex(search), $options: "i" } },
     ];
   }
-  if (section && section !== "all") {
-    filter.section = section;
-  }
-  if (finance2 && finance2 !== "all") {
-    filter.financeUpdate2 = finance2;
-  }
+  if (section && section !== "all") filter.section = section;
+  if (finance2 && finance2 !== "all") filter.financeUpdate2 = finance2;
 
   const total = await CriticalSpare.countDocuments(filter);
   const items = await CriticalSpare.find(filter)
@@ -152,22 +139,16 @@ export async function action({ request }: Route.ActionArgs) {
       const field = formData.get("field") as string;
       const value = formData.get("value") as string;
 
-      if (!itemId || !field || !value) {
-        return { success: false, message: "Missing required fields" };
-      }
+      if (!itemId || !field) return { success: false, message: "Missing fields" };
 
       const allowedFields = [
-        "financeUpdate1",
-        "hqUpdate",
-        "financeUpdate2",
-        "supplyChainUpdate",
+        "financeUpdate1", "hqUpdate", "financeUpdate2",
+        "supplyChainUpdate", "eta",
       ];
-      if (!allowedFields.includes(field)) {
-        return { success: false, message: "Invalid field" };
-      }
+      if (!allowedFields.includes(field)) return { success: false, message: "Invalid field" };
 
       await CriticalSpare.findByIdAndUpdate(itemId, { [field]: value });
-      return { success: true, message: "Status updated successfully" };
+      return { success: true, message: "Updated" };
     }
 
     return { success: false, message: "Invalid action" };
@@ -178,47 +159,78 @@ export async function action({ request }: Route.ActionArgs) {
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-US", {
-    style: "currency",
-    currency: "USD",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    style: "currency", currency: "USD",
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
   }).format(amount);
 }
 
 function formatAmount(amount: number, currency: string) {
   return new Intl.NumberFormat("en-US", {
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0, maximumFractionDigits: 0,
   }).format(amount) + ` ${currency}`;
 }
 
-function getFinance2Color(status: string) {
-  if (/paid/i.test(status)) return "success";
-  if (/bank/i.test(status) || /pending/i.test(status)) return "warning";
-  return "default";
-}
+const finance1Options = [
+  { key: "Instruction Sent", label: "Instruction Sent" },
+  { key: "Instruction On Hold", label: "Instruction On Hold" },
+  { key: "Instruction Not Sent", label: "Instruction Not Sent" },
+  { key: "Payment Initiated", label: "Payment Initiated" },
+  { key: "To Be Loaded @ Fidelity", label: "To Be Loaded @ Fidelity" },
+  { key: "Duplicate", label: "Duplicate" },
+];
 
-function getHQColor(status: string) {
-  if (/processed to bank/i.test(status)) return "warning";
-  if (/processed/i.test(status)) return "success";
-  if (/not/i.test(status)) return "danger";
-  return "default";
-}
+const hqOptions = [
+  { key: "Processed", label: "Processed" },
+  { key: "Not Processed", label: "Not Processed" },
+  { key: "Processed To Bank", label: "Processed To Bank" },
+  { key: "Processed to Bank", label: "Processed to Bank" },
+  { key: "Bank Clearance Pending", label: "Bank Clearance Pending" },
+  { key: "N/A", label: "N/A" },
+];
+
+const finance2Options = [
+  { key: "Paid", label: "Paid" },
+  { key: "Not Paid", label: "Not Paid" },
+  { key: "Bank Clearance Pending", label: "Bank Clearance Pending" },
+  { key: "Bank Feedback Pending", label: "Bank Feedback Pending" },
+  { key: "N/A", label: "N/A" },
+];
+
+const finance1ColorMap: Record<string, "success" | "warning" | "danger" | "primary" | "default"> = {
+  "Instruction Sent": "success",
+  "Instruction On Hold": "warning",
+  "Instruction Not Sent": "danger",
+  "Payment Initiated": "primary",
+  "To Be Loaded @ Fidelity": "warning",
+  "Duplicate": "default",
+};
+
+const hqColorMap: Record<string, "success" | "warning" | "danger" | "primary" | "default"> = {
+  "Processed": "success",
+  "Not Processed": "danger",
+  "Processed To Bank": "warning",
+  "Processed to Bank": "warning",
+  "Bank Clearance Pending": "warning",
+  "N/A": "default",
+};
+
+const finance2ColorMap: Record<string, "success" | "warning" | "danger" | "primary" | "default"> = {
+  "Paid": "success",
+  "Not Paid": "danger",
+  "Bank Clearance Pending": "warning",
+  "Bank Feedback Pending": "warning",
+  "N/A": "default",
+};
 
 export default function CriticalSparesPage() {
   const { items, pagination, sectionCounts } =
     useLoaderData<typeof loader>() as LoaderData;
-  const actionData = useActionData<typeof action>();
-  const navigation = useNavigation();
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [searchValue, setSearchValue] = useState(searchParams.get("search") || "");
   const debouncedSearch = useDebounce(searchValue, 500);
   const currentSection = searchParams.get("section") || "all";
   const currentFinance2 = searchParams.get("finance2") || "all";
-
-  const [selectedItem, setSelectedItem] = useState<CriticalSpareData | null>(null);
-  const [drawerOpen, setDrawerOpen] = useState(false);
 
   useEffect(() => {
     const params = new URLSearchParams(searchParams);
@@ -231,16 +243,6 @@ export default function CriticalSparesPage() {
     setSearchParams(params, { replace: true });
   }, [debouncedSearch]);
 
-  useEffect(() => {
-    if (actionData && navigation.state === "idle") {
-      if (actionData.success) {
-        addToast({ title: actionData.message, color: "success" });
-      } else {
-        addToast({ title: actionData.message, color: "danger" });
-      }
-    }
-  }, [actionData, navigation.state]);
-
   const handleFilter = (key: string, value: string) => {
     const params = new URLSearchParams(searchParams);
     if (value && value !== "all") {
@@ -252,10 +254,6 @@ export default function CriticalSparesPage() {
     setSearchParams(params);
   };
 
-  const handleTabChange = (key: React.Key) => {
-    handleFilter("section", key as string);
-  };
-
   const columns = [
     "Equipment",
     "Vendor",
@@ -263,7 +261,8 @@ export default function CriticalSparesPage() {
     "Amount",
     "USD Equiv.",
     "ETA",
-    "HQ",
+    "Finance 1",
+    "HQ Update",
     "Payment",
     "Supply Chain",
   ];
@@ -275,7 +274,7 @@ export default function CriticalSparesPage() {
           Critical Spares
         </h1>
         <p className="text-sm text-zinc-500 dark:text-zinc-400">
-          Engineering critical order list
+          Engineering critical order list &middot; Click any status cell to edit inline
         </p>
       </div>
 
@@ -324,9 +323,7 @@ export default function CriticalSparesPage() {
           placeholder="Section"
           className="sm:max-w-[160px]"
           selectedKeys={[currentSection]}
-          onSelectionChange={(keys) =>
-            handleFilter("section", Array.from(keys)[0] as string)
-          }
+          onSelectionChange={(keys) => handleFilter("section", Array.from(keys)[0] as string)}
         >
           <SelectItem key="all">All Sections</SelectItem>
           <SelectItem key="Processing">Processing</SelectItem>
@@ -339,9 +336,7 @@ export default function CriticalSparesPage() {
           placeholder="Payment"
           className="sm:max-w-[180px]"
           selectedKeys={[currentFinance2]}
-          onSelectionChange={(keys) =>
-            handleFilter("finance2", Array.from(keys)[0] as string)
-          }
+          onSelectionChange={(keys) => handleFilter("finance2", Array.from(keys)[0] as string)}
         >
           <SelectItem key="all">All Payments</SelectItem>
           <SelectItem key="Paid">Paid</SelectItem>
@@ -350,277 +345,88 @@ export default function CriticalSparesPage() {
         </SelectInput>
       </div>
 
-      {/* Desktop Table */}
-      <div className="hidden lg:block">
-        <SectionCard>
-          <DataTable
-            columns={columns}
-            totalPages={pagination.totalPages}
-            removeWrapper
-            emptyContent={{
-              title: "No critical spares found",
-              subtext: "Adjust your filters or run the seed script",
-            }}
-          >
-            {items.map((item) => (
-              <TableRow
-                key={item.id}
-                className="cursor-pointer"
-                onClick={() => {
-                  setSelectedItem(item);
-                  setDrawerOpen(true);
-                }}
-              >
-                <TableCell>
-                  <div className="max-w-[120px]">
-                    <p className="font-medium text-zinc-900 dark:text-zinc-100 truncate text-xs">
-                      {item.equipment || "-"}
-                    </p>
-                    <Chip size="sm" variant="flat" color="default" classNames={{ content: "text-xs" }}>
-                      {item.section}
-                    </Chip>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <div className="max-w-[180px]">
-                    <p className="font-medium truncate">{item.vendor}</p>
-                    <p className="text-xs text-zinc-500 truncate">{item.description}</p>
-                  </div>
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs font-mono">{item.purchaseOrder || "-"}</span>
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs">{formatAmount(item.amount, item.currency)}</span>
-                </TableCell>
-                <TableCell>
-                  <span className="font-semibold text-xs">
-                    {formatCurrency(item.usdEquivalent)}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs text-zinc-500 max-w-[100px] truncate block">
-                    {item.eta || "-"}
-                  </span>
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    size="sm"
-                    variant="flat"
-                    color={getHQColor(item.hqUpdate)}
-                    classNames={{ content: "text-xs" }}
-                  >
-                    {item.hqUpdate || "-"}
+      {/* Inline-editable Table */}
+      <SectionCard>
+        <DataTable
+          columns={columns}
+          totalPages={pagination.totalPages}
+          removeWrapper
+          emptyContent={{ title: "No critical spares found", subtext: "Adjust your filters" }}
+        >
+          {items.map((item) => (
+            <TableRow key={item.id}>
+              <TableCell>
+                <div className="max-w-[120px]">
+                  <p className="font-medium text-zinc-900 dark:text-zinc-100 truncate text-xs">
+                    {item.equipment || "-"}
+                  </p>
+                  <Chip size="sm" variant="flat" color="default" classNames={{ content: "text-xs" }}>
+                    {item.section}
                   </Chip>
-                </TableCell>
-                <TableCell>
-                  <Chip
-                    size="sm"
-                    variant="flat"
-                    color={getFinance2Color(item.financeUpdate2)}
-                    classNames={{ content: "text-xs" }}
-                  >
-                    {item.financeUpdate2 || "-"}
-                  </Chip>
-                </TableCell>
-                <TableCell>
-                  <span className="text-xs text-zinc-500 max-w-[120px] truncate block">
-                    {item.supplyChainUpdate || "-"}
-                  </span>
-                </TableCell>
-              </TableRow>
-            ))}
-          </DataTable>
-        </SectionCard>
-      </div>
-
-      {/* Mobile Cards */}
-      <div className="lg:hidden flex flex-col gap-2">
-        {items.length === 0 ? (
-          <div className="text-center py-12">
-            <Wrench size={48} className="mx-auto text-zinc-300 dark:text-zinc-600 mb-4" />
-            <p className="text-zinc-500">No critical spares found</p>
-          </div>
-        ) : (
-          items.map((item) => (
-            <div
-              key={item.id}
-              className="p-3 bg-white dark:bg-zinc-900 rounded-lg border border-zinc-200 dark:border-zinc-800"
-              onClick={() => {
-                setSelectedItem(item);
-                setDrawerOpen(true);
-              }}
-            >
-              <div className="flex justify-between items-start mb-2">
-                <div className="flex-1 min-w-0">
-                  <p className="font-medium text-sm truncate">{item.vendor}</p>
-                  <p className="text-xs text-zinc-500 truncate">{item.equipment || item.description}</p>
                 </div>
-                <span className="font-bold text-sm ml-2">
-                  {formatCurrency(item.usdEquivalent)}
-                </span>
-              </div>
-              <div className="flex gap-1.5 flex-wrap">
-                <Chip size="sm" variant="flat" color="default" classNames={{ content: "text-xs" }}>
-                  {item.section}
-                </Chip>
-                <Chip size="sm" variant="flat" color={getFinance2Color(item.financeUpdate2)} classNames={{ content: "text-xs" }}>
-                  {item.financeUpdate2 || "Pending"}
-                </Chip>
-                {item.eta && (
-                  <Chip size="sm" variant="flat" color="warning" classNames={{ content: "text-xs" }}>
-                    {item.eta.substring(0, 20)}
-                  </Chip>
-                )}
-              </div>
-            </div>
-          ))
-        )}
-      </div>
-
-      {/* Detail Drawer */}
-      <SideDrawer
-        isOpen={drawerOpen}
-        onClose={() => {
-          setDrawerOpen(false);
-          setSelectedItem(null);
-        }}
-        title="Critical Spare Details"
-      >
-        {selectedItem && (
-          <div className="flex flex-col gap-5">
-            <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Vendor</p>
-              <p className="font-semibold text-zinc-900 dark:text-zinc-100">
-                {selectedItem.vendor}
-              </p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Section</p>
-                <Chip size="sm" variant="flat" color="default">
-                  {selectedItem.section}
-                </Chip>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Equipment</p>
-                <p className="text-sm">{selectedItem.equipment || "-"}</p>
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Description</p>
-              <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                {selectedItem.description || "-"}
-              </p>
-            </div>
-
-            <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">Purchase Order</p>
-              <p className="text-sm font-mono">{selectedItem.purchaseOrder || "-"}</p>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Amount</p>
-                <p className="font-bold">{formatAmount(selectedItem.amount, selectedItem.currency)}</p>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">USD Equivalent</p>
-                <p className="font-bold text-lg">{formatCurrency(selectedItem.usdEquivalent)}</p>
-              </div>
-            </div>
-
-            <div>
-              <p className="text-xs text-zinc-500 uppercase mb-1">ETA</p>
-              <p className="text-sm">{selectedItem.eta || "-"}</p>
-            </div>
-
-            {selectedItem.supplyChainUpdate && (
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Supply Chain</p>
-                <p className="text-sm text-zinc-700 dark:text-zinc-300">
-                  {selectedItem.supplyChainUpdate}
-                </p>
-              </div>
-            )}
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Finance Update 1</p>
-                <p className="text-sm">{selectedItem.financeUpdate1 || "-"}</p>
-              </div>
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">HQ Update</p>
-                <Chip size="sm" variant="flat" color={getHQColor(selectedItem.hqUpdate)}>
-                  {selectedItem.hqUpdate || "-"}
-                </Chip>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <p className="text-xs text-zinc-500 uppercase mb-1">Finance Update 2</p>
-                <Chip size="sm" variant="flat" color={getFinance2Color(selectedItem.financeUpdate2)}>
-                  {selectedItem.financeUpdate2 || "-"}
-                </Chip>
-              </div>
-              {selectedItem.paymentDate && (
-                <div>
-                  <p className="text-xs text-zinc-500 uppercase mb-1">Payment Date</p>
-                  <p className="text-sm">{selectedItem.paymentDate}</p>
+              </TableCell>
+              <TableCell>
+                <div className="max-w-[160px]">
+                  <p className="font-medium truncate text-xs">{item.vendor}</p>
+                  <p className="text-xs text-zinc-500 truncate">{item.description}</p>
                 </div>
-              )}
-            </div>
-
-            <div className="border-t border-zinc-200 dark:border-zinc-700 pt-4">
-              <p className="text-xs text-zinc-500 uppercase mb-3 font-semibold">
-                Update Status
-              </p>
-
-              <Form method="post" className="flex flex-col gap-3">
-                <input type="hidden" name="intent" value="updateStatus" />
-                <input type="hidden" name="itemId" value={selectedItem.id} />
-                <input type="hidden" name="field" value="financeUpdate2" />
-                <SelectInput
-                  name="value"
-                  label="Payment Status"
-                  defaultSelectedKeys={selectedItem.financeUpdate2 ? [selectedItem.financeUpdate2] : []}
-                >
-                  <SelectItem key="Paid">Paid</SelectItem>
-                  <SelectItem key="Not Paid">Not Paid</SelectItem>
-                  <SelectItem key="Bank Clearance Pending">Bank Clearance Pending</SelectItem>
-                  <SelectItem key="Bank Feedback Pending">Bank Feedback Pending</SelectItem>
-                </SelectInput>
-                <Button type="submit" size="sm" color="warning" variant="flat">
-                  Update Payment
-                </Button>
-              </Form>
-
-              <Form method="post" className="flex flex-col gap-3 mt-4">
-                <input type="hidden" name="intent" value="updateStatus" />
-                <input type="hidden" name="itemId" value={selectedItem.id} />
-                <input type="hidden" name="field" value="hqUpdate" />
-                <SelectInput
-                  name="value"
-                  label="HQ Update"
-                  defaultSelectedKeys={selectedItem.hqUpdate ? [selectedItem.hqUpdate] : []}
-                >
-                  <SelectItem key="Processed">Processed</SelectItem>
-                  <SelectItem key="Not Processed">Not Processed</SelectItem>
-                  <SelectItem key="Processed To Bank">Processed To Bank</SelectItem>
-                  <SelectItem key="Processed to Bank">Processed to Bank</SelectItem>
-                  <SelectItem key="Bank Clearance Pending">Bank Clearance Pending</SelectItem>
-                </SelectInput>
-                <Button type="submit" size="sm" color="warning" variant="flat">
-                  Update HQ
-                </Button>
-              </Form>
-            </div>
-          </div>
-        )}
-      </SideDrawer>
+              </TableCell>
+              <TableCell>
+                <span className="text-xs font-mono">{item.purchaseOrder || "-"}</span>
+              </TableCell>
+              <TableCell>
+                <span className="text-xs">{formatAmount(item.amount, item.currency)}</span>
+              </TableCell>
+              <TableCell>
+                <span className="font-semibold text-xs">{formatCurrency(item.usdEquivalent)}</span>
+              </TableCell>
+              <TableCell>
+                <InlineTextCell
+                  itemId={item.id}
+                  field="eta"
+                  value={item.eta}
+                  placeholder="Set ETA..."
+                />
+              </TableCell>
+              <TableCell>
+                <InlineSelectCell
+                  itemId={item.id}
+                  field="financeUpdate1"
+                  value={item.financeUpdate1}
+                  options={finance1Options}
+                  colorMap={finance1ColorMap}
+                />
+              </TableCell>
+              <TableCell>
+                <InlineSelectCell
+                  itemId={item.id}
+                  field="hqUpdate"
+                  value={item.hqUpdate}
+                  options={hqOptions}
+                  colorMap={hqColorMap}
+                />
+              </TableCell>
+              <TableCell>
+                <InlineSelectCell
+                  itemId={item.id}
+                  field="financeUpdate2"
+                  value={item.financeUpdate2}
+                  options={finance2Options}
+                  colorMap={finance2ColorMap}
+                />
+              </TableCell>
+              <TableCell>
+                <InlineTextCell
+                  itemId={item.id}
+                  field="supplyChainUpdate"
+                  value={item.supplyChainUpdate}
+                  placeholder="Add update..."
+                />
+              </TableCell>
+            </TableRow>
+          ))}
+        </DataTable>
+      </SectionCard>
     </FadeUpPageEntry>
   );
 }
