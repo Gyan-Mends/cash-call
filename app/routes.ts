@@ -11,6 +11,9 @@ export default [
     // Protected routes
     layout("routes/protected/layout.tsx", [
         route("dashboard", "routes/protected/dashboard.tsx"),
+        route("shipments", "routes/protected/shipments/shipment-list.tsx"),
+        route("shipments/:shipmentId", "routes/protected/shipments/shipment-detail.tsx"),
+        route("critical-spares", "routes/protected/critical-spares/critical-spares.tsx"),
         route("users", "routes/protected/users/user-list.tsx"),
     ]),
 
